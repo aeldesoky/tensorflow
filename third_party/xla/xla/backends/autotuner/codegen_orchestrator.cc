@@ -89,10 +89,11 @@ CodegenOrchestrator::GetDefaultConfig(const HloInstruction& instr) const {
   std::vector<absl::Status> errors;
   for (auto& backend : codegen_backends_) {
     auto config = backend->GetDefaultConfig(instr);
-    if (config.ok()) {
+    if (config.ok() && *config != nullptr) {
       return Config{backend.get(), std::move(*config)};
     }
-    errors.push_back(config.status());
+    errors.push_back(config.ok() ? absl::UnknownError("config is null")
+                                 : config.status());
   }
   std::string combined_error =
       absl::StrCat("No backend with default config found for instruction: ",

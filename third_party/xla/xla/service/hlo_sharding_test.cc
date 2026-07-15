@@ -39,6 +39,7 @@ limitations under the License.
 #include "xla/shape_tree.h"
 #include "xla/shape_util.h"
 #include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/status_matchers.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/util/proto/parse_text_proto.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
@@ -1213,6 +1214,24 @@ TEST(V3ToV2Sharding, Unreduced) {
   EXPECT_EQ(HloSharding::V3ToV2Sharding(ns),
             HloSharding::Subgroup(TileAssignment({2, 1, 2}),
                                   {OpSharding::UNREDUCED}));
+}
+
+TEST(V3ToV2Sharding, UnreducedMax) {
+  ASSERT_OK_AND_ASSIGN(
+      xla::HloSharding ns,
+      xla::ParseSharding(
+          "{mesh['a'=2, 'b'=2], [{'a'}, {}], unreduced=max{'b'}}"));
+  HloSharding v2 = HloSharding::V3ToV2Sharding(ns.named_sharding());
+  EXPECT_EQ(v2.reduction_op(), ReductionOp::kMax);
+}
+
+TEST(V3ToV2Sharding, UnreducedMin) {
+  ASSERT_OK_AND_ASSIGN(
+      xla::HloSharding ns,
+      xla::ParseSharding(
+          "{mesh['a'=2, 'b'=2], [{'a'}, {}], unreduced=min{'b'}}"));
+  HloSharding v2 = HloSharding::V3ToV2Sharding(ns.named_sharding());
+  EXPECT_EQ(v2.reduction_op(), ReductionOp::kMin);
 }
 
 TEST(V3ToV2Sharding, Manual) {

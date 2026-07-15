@@ -306,6 +306,9 @@ void CommonPjRtBuffer::ScopedHold::DropHold() {
   }
 }
 
+CommonPjRtBuffer::ScopedHold::ScopedHold()
+    : parent_(nullptr), type_(kUsage), state_(kUninitialized) {}
+
 CommonPjRtBuffer::ScopedHold::~ScopedHold() { DropHold(); }
 
 CommonPjRtBuffer::ScopedHold::ScopedHold(ScopedHold&& other)

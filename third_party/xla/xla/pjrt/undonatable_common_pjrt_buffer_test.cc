@@ -15,9 +15,7 @@ limitations under the License.
 
 #include "xla/pjrt/undonatable_common_pjrt_buffer.h"
 
-#include <cstddef>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -26,11 +24,13 @@ limitations under the License.
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/future.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/pjrt/device_event.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/pjrt/plugin/xla_cpu/cpu_client_options.h"
+#include "xla/pjrt/pjrt_executable.h"
 #include "xla/pjrt/plugin/xla_cpu/xla_cpu_pjrt_client.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/shape.h"
@@ -41,8 +41,8 @@ limitations under the License.
 namespace xla {
 namespace {
 
-using ::absl_testing::StatusIs;
 using ::testing::Eq;
+using ::testing::status::StatusIs;
 
 // Test fixture holding common lifecycle objects.
 class UndonatableCommonPjRtBufferTest : public ::testing::Test {
@@ -203,6 +203,78 @@ TEST_F(UndonatableCommonPjRtBufferTest, GetReadyFuture_PropagatesErrors) {
   absl::Status status = ready_fut.Await();
   EXPECT_TRUE(ready_fut.IsReady());
   EXPECT_THAT(status, StatusIs(absl::StatusCode::kInternal, "fake error"));
+}
+
+TEST_F(UndonatableCommonPjRtBufferTest, ExecutesSuccessfullyWithoutDonation) {
+  XlaBuilder builder("identity");
+  auto param = Parameter(&builder, 0, *shape_, "param");
+  auto comp = builder.Build(param).value();
+
+  ASSERT_OK_AND_ASSIGN(auto executable,
+                       client_->CompileAndLoad(comp, CompileOptions{}));
+
+  auto buffer = std::make_unique<UndonatableCommonPjRtBuffer>(
+      shape_, raw_buffer_, absl::InlinedVector<PjRtDeviceEventRef, 2>(),
+      memory_space_);
+
+  ASSERT_OK_AND_ASSIGN(auto results,
+                       executable->Execute({{buffer.get()}}, ExecuteOptions{}));
+
+  ASSERT_EQ(results.size(), 1);     // One replica
+  ASSERT_EQ(results[0].size(), 1);  // One output buffer
+  PjRtBuffer* output_buffer = results[0][0].get();
+  EXPECT_NE(output_buffer, nullptr);
+}
+
+TEST_F(UndonatableCommonPjRtBufferTest, ExecuteFailsIfDonationRequested) {
+  XlaBuilder builder("identity_aliased");
+  auto param = Parameter(&builder, 0, *shape_, "param");
+  builder.SetUpAlias({/*output_index=*/}, /*param_number=*/0,
+                     /*param_index=*/{});
+  auto comp = builder.Build(param).value();
+
+  ASSERT_OK_AND_ASSIGN(auto executable,
+                       client_->CompileAndLoad(comp, CompileOptions{}));
+
+  auto buffer = std::make_unique<UndonatableCommonPjRtBuffer>(
+      shape_, raw_buffer_, absl::InlinedVector<PjRtDeviceEventRef, 2>(),
+      memory_space_);
+
+  auto result_or = executable->Execute({{buffer.get()}}, ExecuteOptions{});
+
+  EXPECT_THAT(
+      result_or.status(),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               ::testing::HasSubstr(
+                   "Donation requested on UndonatableCommonPjRtBuffer")));
+}
+
+TEST_F(UndonatableCommonPjRtBufferTest,
+       ExecuteFailsIfDefinitionEventIsInError) {
+  auto future = tsl::MakeUnconstructedAsyncValueRef<int>();
+  future.SetError(absl::InternalError("Simulated upstream error"));
+
+  absl::InlinedVector<PjRtDeviceEventRef, 2> events;
+  events.push_back(
+      PjRtDeviceEventPtr::FromAsyncValue(future.GetAsyncValue()).CopyRef());
+
+  auto buffer = std::make_unique<UndonatableCommonPjRtBuffer>(
+      shape_, raw_buffer_, std::move(events), memory_space_);
+
+  XlaBuilder builder("identity");
+  auto param = Parameter(&builder, 0, *shape_, "param");
+  auto comp = builder.Build(param).value();
+  ASSERT_OK_AND_ASSIGN(auto executable,
+                       client_->CompileAndLoad(comp, CompileOptions{}));
+
+  ASSERT_OK_AND_ASSIGN(auto results,
+                       executable->Execute({{buffer.get()}}, ExecuteOptions{}));
+  ASSERT_EQ(results.size(), 1);     // One replica
+  ASSERT_EQ(results[0].size(), 1);  // One output buffer
+  PjRtBuffer* output_buffer = results[0][0].get();
+  EXPECT_THAT(output_buffer->GetReadyFuture().Await(),
+              StatusIs(absl::StatusCode::kInternal,
+                       ::testing::HasSubstr("Simulated upstream error")));
 }
 
 }  // namespace

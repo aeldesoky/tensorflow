@@ -216,6 +216,7 @@ class CommonPjRtBuffer : public PjRtBuffer {
       kError
     };
 
+    ScopedHold();
     ~ScopedHold();
     ScopedHold(ScopedHold&& other);
     ScopedHold(const ScopedHold&) = delete;

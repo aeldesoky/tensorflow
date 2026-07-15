@@ -1112,6 +1112,11 @@ class ApplyAdadeltaOp : public OpKernel {
         absl::InvalidArgumentError(absl::StrCat(
             "var and accum do not have the same shape",
             var.shape().DebugString(), " ", accum.shape().DebugString())));
+    OP_REQUIRES(ctx, var.shape().IsSameSize(accum_update.shape()),
+                absl::InvalidArgumentError(absl::StrCat(
+                    "var and accum_update do not have the same shape",
+                    var.shape().DebugString(), " ",
+                    accum_update.shape().DebugString())));
     OP_REQUIRES(
         ctx, var.shape().IsSameSize(grad.shape()),
         absl::InvalidArgumentError(absl::StrCat(
@@ -2488,6 +2493,10 @@ class SparseApplyAdagradDAOp : public OpKernel {
                     absl::StrCat("global_step is not a scalar: ",
                                  global_step.shape().DebugString())));
 
+    OP_REQUIRES(ctx, grad.dims() == var.dims(),
+                absl::InvalidArgumentError("grad must have the same number of "
+                                           "dimensions as var"));
+
     int64_t inner_dim = 1;
     for (int d = 1; d < var.dims(); d++) {
       OP_REQUIRES(ctx, var.dim_size(d) == grad.dim_size(d),
@@ -3777,6 +3786,11 @@ class ApplyAdamWithAmsgradOp : public OpKernel {
                 absl::InvalidArgumentError(absl::StrCat(
                     "var and v do not have the same shape",
                     var.shape().DebugString(), " ", v.shape().DebugString())));
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(vhat.shape()),
+        absl::InvalidArgumentError(absl::StrCat(
+            "var and vhat do not have the same shape",
+            var.shape().DebugString(), " ", vhat.shape().DebugString())));
     OP_REQUIRES(
         ctx, var.shape().IsSameSize(grad.shape()),
         absl::InvalidArgumentError(absl::StrCat(

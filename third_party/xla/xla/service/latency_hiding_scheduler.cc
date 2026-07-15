@@ -21,6 +21,7 @@ limitations under the License.
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,6 +45,8 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
 #include "re2/re2.h"
@@ -1896,9 +1899,11 @@ bool ReadySetLt::MaybeUpdate(DefaultSchedulerCore::ScheduleCandidate& a,
                              DefaultSchedulerCore::ScheduleCandidate& b,
                              const char** reason) const {
   bool result = AIsBetterThanB(a, b, reason);
-  if (a.node->IsSupportedAsyncStart() || a.node->IsSupportedAsyncDone() ||
-      b.node->IsSupportedAsyncStart() || b.node->IsSupportedAsyncDone() ||
-      IsCollective(&a.node->GetInstr()) || IsCollective(&b.node->GetInstr())) {
+  if (VLOG_IS_ON(1) &&
+      (a.node->IsSupportedAsyncStart() || a.node->IsSupportedAsyncDone() ||
+       b.node->IsSupportedAsyncStart() || b.node->IsSupportedAsyncDone() ||
+       IsCollective(&a.node->GetInstr()) ||
+       IsCollective(&b.node->GetInstr()))) {
     VLOG(1) << "Async comparison: a: " << a.node->GetInstr().name()
             << " b: " << b.node->GetInstr().name() << " result: " << result
             << " reason: " << *reason;
@@ -4274,7 +4279,9 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
                             .ToString());
     }
   }
+  std::map<std::string, double> time_per_computation;
   for (HloComputation* computation : computations_to_schedule_) {
+    absl::Time start = absl::Now();
     ASSIGN_OR_RETURN(std::vector<HloInstruction*> new_schedule,
                      scheduler_core_->ScheduleComputation(computation));
     // Update target specific states that may include altering the
@@ -4285,6 +4292,9 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
                                     absl::MakeConstSpan(new_schedule));
     scheduling_context_->GetAsyncTracker()->ResetTargetDefinedStates();
     scheduling_context_->GetAsyncTracker()->InvalidateCache(computation);
+    absl::Time end = absl::Now();
+    std::string computation_name(computation->name());
+    time_per_computation[computation_name] = absl::ToDoubleSeconds(end - start);
   }
   int64_t fragmentation_size =
       scheduling_context_->GetAsyncTracker()
@@ -4307,6 +4317,7 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
     RETURN_IF_ERROR(scheduler_core_->InitializeScheduler(module));
     scheduler_core_->SetMemoryLimit(scheduler_core_->GetMemoryLimit() * 0.9);
     for (HloComputation* computation : computations_to_schedule_) {
+      absl::Time start = absl::Now();
       ASSIGN_OR_RETURN(std::vector<HloInstruction*> new_schedule,
                        scheduler_core_->ScheduleComputation(computation));
       scheduling_context_->GetAsyncTracker()->UpdateTargetDefinedStates(
@@ -4315,6 +4326,10 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
                                       absl::MakeConstSpan(new_schedule));
       scheduling_context_->GetAsyncTracker()->ResetTargetDefinedStates();
       scheduling_context_->GetAsyncTracker()->InvalidateCache(computation);
+      absl::Time end = absl::Now();
+      std::string computation_name(computation->name());
+      time_per_computation[computation_name] +=
+          absl::ToDoubleSeconds(end - start);
     }
     fragmentation_size =
         scheduling_context_->GetAsyncTracker()
@@ -4329,6 +4344,12 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
             << " LatencyHidingScheduler current memory usage: "
             << scheduler_core_->GetMemoryPeak()
             << " bytes. Current limit: " << scheduler_core_->GetMemoryLimit();
+  for (const auto& [computation_name, time] : time_per_computation) {
+    LOG(INFO) << "[" << name() << "]"
+              << " LatencyHidingScheduler time for computation "
+              << computation_name << ": " << absl::StrFormat("%.2f", time)
+              << " seconds.";
+  }
   if (VLOG_IS_ON(1)) {
     // Log the statistics after scheduling.
     ModulePressureState post_scheduling_pressure_state = ModulePressureState(

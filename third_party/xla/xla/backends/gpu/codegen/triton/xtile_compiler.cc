@@ -213,6 +213,18 @@ absl::Status ValidateF4UseInTritonFusion(const HloComputation& computation) {
   }
   return absl::OkStatus();
 }
+
+absl::Status ValidateComplexUseInTritonFusion(
+    const HloComputation& computation) {
+  for (const HloInstruction* instruction : computation.instructions()) {
+    if (primitive_util::IsComplexType(instruction->shape().element_type())) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Complex types are unsupported in Triton codegen: ",
+          instruction->ToString(HloPrintOptions::ShortParsable())));
+    }
+  }
+  return absl::OkStatus();
+}
 }  // namespace
 
 namespace ttir = ::mlir::triton;
@@ -406,6 +418,7 @@ absl::StatusOr<TritonKernelSource> CreateTritonModule(
         AddCollectiveMetadataArguments(opaque_args_types, b, hlo_computation));
   }
 
+  RETURN_IF_ERROR(ValidateComplexUseInTritonFusion(*hlo_computation));
   RETURN_IF_ERROR(ValidateF4UseInTritonFusion(*hlo_computation));
   ASSIGN_OR_RETURN(
       auto triton_module,

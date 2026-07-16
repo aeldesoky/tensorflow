@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_CODEGEN_XTILE_CODEGEN_EMITTER_HELPERS_H_
 #define XLA_CODEGEN_XTILE_CODEGEN_EMITTER_HELPERS_H_
 
+#include <complex>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -261,6 +262,21 @@ mlir::Value CreateConst(mlir::ImplicitLocOpBuilder& b, mlir::Type type,
   LOG(FATAL) << "Constant type not supported: " << llvm_ir::DumpToString(type);
 }
 
+template <typename T>
+mlir::Value CreateConst(mlir::ImplicitLocOpBuilder& b, mlir::Type type,
+                        std::complex<T> value) {
+  if (auto complex_type = mlir::dyn_cast<mlir::ComplexType>(type)) {
+    auto elem_type = complex_type.getElementType();
+    mlir::Attribute real_attr =
+        b.getFloatAttr(elem_type, static_cast<double>(value.real()));
+    mlir::Attribute imag_attr =
+        b.getFloatAttr(elem_type, static_cast<double>(value.imag()));
+    return b.create<mlir::arith::ConstantOp>(
+        b.getArrayAttr({real_attr, imag_attr}));
+  }
+  LOG(FATAL) << "Constant type not supported: " << llvm_ir::DumpToString(type);
+}
+
 // Create a tensor constant.
 template <typename T>
 mlir::TypedValue<mlir::RankedTensorType> CreateConst(
@@ -292,6 +308,25 @@ mlir::TypedValue<mlir::RankedTensorType> CreateConst(
     mlir::Value result =
         b.create<mlir::arith::ConstantOp>(mlir::DenseElementsAttr::get(
             tensor_type, b.getFloatAttr(type, static_cast<double>(value))));
+    return mlir::cast<mlir::TypedValue<mlir::RankedTensorType>>(result);
+  }
+  LOG(FATAL) << "Constant type not supported: " << llvm_ir::DumpToString(type);
+}
+
+template <typename T>
+mlir::TypedValue<mlir::RankedTensorType> CreateConst(
+    mlir::ImplicitLocOpBuilder& b, mlir::Type type, std::complex<T> value,
+    llvm::ArrayRef<int64_t> shape) {
+  auto tensor_type = mlir::RankedTensorType::get(shape, type);
+  if (auto complex_type = mlir::dyn_cast<mlir::ComplexType>(type)) {
+    auto elem_type = complex_type.getElementType();
+    mlir::Attribute real_attr =
+        b.getFloatAttr(elem_type, static_cast<double>(value.real()));
+    mlir::Attribute imag_attr =
+        b.getFloatAttr(elem_type, static_cast<double>(value.imag()));
+    mlir::ArrayAttr complex_attr = b.getArrayAttr({real_attr, imag_attr});
+    mlir::Value result = b.create<mlir::arith::ConstantOp>(
+        mlir::DenseElementsAttr::get(tensor_type, complex_attr));
     return mlir::cast<mlir::TypedValue<mlir::RankedTensorType>>(result);
   }
   LOG(FATAL) << "Constant type not supported: " << llvm_ir::DumpToString(type);

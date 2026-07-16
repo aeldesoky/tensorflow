@@ -150,6 +150,51 @@ class LowerConvertOp
       return LowerFloatToIntConvert(builder, loc, value, src_fp_element_ty,
                                     dst_int_element_ty, src_ty, dst_ty);
     }
+    // => complex
+    auto dst_complex_element_ty =
+        mlir::dyn_cast<mlir::ComplexType>(dst_element_ty);
+    if (dst_complex_element_ty) {
+      Type real_elem_ty = dst_complex_element_ty.getElementType();
+      Type real_ty = dst_ty;
+      if (auto shaped_ty = mlir::dyn_cast<ShapedType>(dst_ty)) {
+        real_ty = shaped_ty.clone(real_elem_ty);
+      } else {
+        real_ty = real_elem_ty;
+      }
+      Value real_input = value;
+      if (auto src_complex_elem_ty =
+              mlir::dyn_cast<mlir::ComplexType>(src_element_ty)) {
+        real_input = mlir::stablehlo::RealOp::create(
+            builder, loc,
+            mlir::dyn_cast<ShapedType>(src_ty)
+                ? mlir::dyn_cast<ShapedType>(src_ty).clone(
+                      src_complex_elem_ty.getElementType())
+                : src_complex_elem_ty.getElementType(),
+            value);
+        src_ty = real_input.getType();
+      }
+      ASSIGN_OR_RETURN(Value real_part,
+                       LowerConvert(builder, loc, real_input, src_ty, real_ty));
+      Value imag_part = ZerosLike(builder, real_part);
+      return mlir::stablehlo::ComplexOp::create(builder, loc, dst_ty, real_part,
+                                                imag_part)
+          .getResult();
+    }
+    // complex => non-complex
+    auto src_complex_element_ty =
+        mlir::dyn_cast<mlir::ComplexType>(src_element_ty);
+    if (src_complex_element_ty) {
+      Type real_elem_ty = src_complex_element_ty.getElementType();
+      Type real_ty = src_ty;
+      if (auto shaped_ty = mlir::dyn_cast<ShapedType>(src_ty)) {
+        real_ty = shaped_ty.clone(real_elem_ty);
+      } else {
+        real_ty = real_elem_ty;
+      }
+      Value real_part =
+          mlir::stablehlo::RealOp::create(builder, loc, real_ty, value);
+      return LowerConvert(builder, loc, real_part, real_ty, dst_ty);
+    }
 
     return absl::UnimplementedError(absl::StrCat(
         "Type conversion from ", ::xla::llvm_ir::DumpToString(src_ty), " to ",
@@ -306,6 +351,11 @@ class LowerCompareOp
   mlir::LogicalResult matchAndRewrite(
       mlir::stablehlo::CompareOp op,
       mlir::PatternRewriter& rewriter) const override {
+    const Type element_type = mlir::getElementTypeOrSelf(op.getLhs());
+    if (mlir::isa<mlir::ComplexType>(element_type)) {
+      return rewriter.notifyMatchFailure(
+          op, "complex types are legalized by StablehloLegalizeToLinalg");
+    }
     Value compare_result = GetCompareOp(rewriter, op);
 
     rewriter.replaceOp(op, compare_result);
